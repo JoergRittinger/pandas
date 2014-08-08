@@ -365,7 +365,7 @@ def read_sql_query(sql, con, index_col=None, coerce_float=True, params=None,
 
 
 def read_sql(sql, con, index_col=None, coerce_float=True, params=None,
-             parse_dates=None, columns=None):
+             parse_dates=None, columns=None, schema=None):
     """
     Read SQL query or database table into a DataFrame.
 
@@ -396,6 +396,7 @@ def read_sql(sql, con, index_col=None, coerce_float=True, params=None,
     columns : list
         List of column names to select from sql table (only used when reading
         a table).
+    schema : Name of SQL schema in database.
 
     Returns
     -------
@@ -421,11 +422,16 @@ def read_sql(sql, con, index_col=None, coerce_float=True, params=None,
             sql, index_col=index_col, params=params,
             coerce_float=coerce_float, parse_dates=parse_dates)
 
-    if pandas_sql.has_table(sql):
-        pandas_sql.meta.reflect(only=[sql])
+    try:
+        _is_table_name = pandas_sql.has_table(sql, schema=schema)
+    except:
+        _is_table_name = False
+
+    if _is_table_name:
+        pandas_sql.meta.reflect(only=[sql], schema=schema)
         return pandas_sql.read_table(
             sql, index_col=index_col, coerce_float=coerce_float,
-            parse_dates=parse_dates, columns=columns)
+            parse_dates=parse_dates, columns=columns, schema=schema)
     else:
         return pandas_sql.read_sql(
             sql, index_col=index_col, params=params,
