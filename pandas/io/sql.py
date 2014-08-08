@@ -37,7 +37,7 @@ def _is_sqlalchemy_engine(con):
         try:
             import sqlalchemy
             _SQLALCHEMY_INSTALLED = True
-            
+
             from distutils.version import LooseVersion
             ver = LooseVersion(sqlalchemy.__version__)
             # For sqlalchemy versions < 0.8.2, the BIGINT type is recognized
@@ -46,7 +46,7 @@ def _is_sqlalchemy_engine(con):
             if ver < '0.8.2':
                 from sqlalchemy import BigInteger
                 from sqlalchemy.ext.compiler import compiles
-        
+
                 @compiles(BigInteger, 'sqlite')
                 def compile_big_int_sqlite(type_, compiler, **kw):
                     return 'INTEGER'
@@ -144,7 +144,7 @@ def _safe_fetch(cur):
         if not isinstance(result, list):
             result = list(result)
         return result
-    except Exception as e: # pragma: no cover
+    except Exception as e:  # pragma: no cover
         excName = e.__class__.__name__
         if excName == 'OperationalError':
             return []
@@ -186,7 +186,7 @@ def tquery(sql, con=None, cur=None, retry=True):
             con.commit()
         except Exception as e:
             excName = e.__class__.__name__
-            if excName == 'OperationalError': # pragma: no cover
+            if excName == 'OperationalError':  # pragma: no cover
                 print('Failed to commit, may need to restart interpreter')
             else:
                 raise
@@ -198,7 +198,7 @@ def tquery(sql, con=None, cur=None, retry=True):
     if result and len(result[0]) == 1:
         # python 3 compat
         result = list(lzip(*result)[0])
-    elif result is None: # pragma: no cover
+    elif result is None:  # pragma: no cover
         result = []
 
     return result
@@ -253,7 +253,7 @@ def uquery(sql, con=None, cur=None, retry=True, params=None):
 #--- Read and write to DataFrames
 
 def read_sql_table(table_name, con, index_col=None, coerce_float=True,
-                   parse_dates=None, columns=None):
+                   parse_dates=None, columns=None, schema=None):
     """Read SQL database table into a DataFrame.
 
     Given a table name and an SQLAlchemy engine, returns a DataFrame.
@@ -281,6 +281,7 @@ def read_sql_table(table_name, con, index_col=None, coerce_float=True,
           such as SQLite
     columns : list
         List of column names to select from sql table
+    schema : Name of SQL schema in database.
 
     Returns
     -------
@@ -299,14 +300,14 @@ def read_sql_table(table_name, con, index_col=None, coerce_float=True,
     from sqlalchemy.schema import MetaData
     meta = MetaData(con)
     try:
-        meta.reflect(only=[table_name])
+        meta.reflect(only=[table_name], schema=schema)
     except sqlalchemy.exc.InvalidRequestError:
         raise ValueError("Table %s not found" % table_name)
 
     pandas_sql = PandasSQLAlchemy(con, meta=meta)
     table = pandas_sql.read_table(
         table_name, index_col=index_col, coerce_float=coerce_float,
-        parse_dates=parse_dates, columns=columns)
+        parse_dates=parse_dates, columns=columns, schema=schema)
 
     if table is not None:
         return table
@@ -432,7 +433,7 @@ def read_sql(sql, con, index_col=None, coerce_float=True, params=None,
 
 
 def to_sql(frame, name, con, flavor='sqlite', if_exists='fail', index=True,
-           index_label=None):
+           index_label=None, schema=None):
     """
     Write records stored in a DataFrame to a SQL database.
 
@@ -459,6 +460,7 @@ def to_sql(frame, name, con, flavor='sqlite', if_exists='fail', index=True,
         Column label for index column(s). If None is given (default) and
         `index` is True, then the index names are used.
         A sequence should be given if the DataFrame uses MultiIndex.
+    schema : Name of SQL schema in database.
 
     """
     if if_exists not in ('fail', 'replace', 'append'):
@@ -472,10 +474,10 @@ def to_sql(frame, name, con, flavor='sqlite', if_exists='fail', index=True,
         raise NotImplementedError
 
     pandas_sql.to_sql(frame, name, if_exists=if_exists, index=index,
-                      index_label=index_label)
+                      index_label=index_label, schema=schema)
 
 
-def has_table(table_name, con, flavor='sqlite'):
+def has_table(table_name, con, flavor='sqlite', schema=None):
     """
     Check if DataBase has named table.
 
@@ -491,13 +493,14 @@ def has_table(table_name, con, flavor='sqlite'):
         The flavor of SQL to use. Ignored when using SQLAlchemy engine.
         'mysql' is deprecated and will be removed in future versions, but it
         will be further supported through SQLAlchemy engines.
+    schema : Name of SQL schema in database.
 
     Returns
     -------
     boolean
     """
     pandas_sql = pandasSQL_builder(con, flavor=flavor)
-    return pandas_sql.has_table(table_name)
+    return pandas_sql.has_table(table_name, schema=schema)
 
 table_exists = has_table
 
@@ -531,24 +534,26 @@ class PandasSQLTable(PandasObject):
     """
     # TODO: support for multiIndex
     def __init__(self, name, pandas_sql_engine, frame=None, index=True,
-                 if_exists='fail', prefix='pandas', index_label=None):
+                 if_exists='fail', prefix='pandas', index_label=None,
+                 schema=None):
         self.name = name
         self.pd_sql = pandas_sql_engine
         self.prefix = prefix
         self.frame = frame
         self.index = self._index_name(index, index_label)
+        self.schema = schema
 
         if frame is not None:
             # We want to write a frame
-            if self.pd_sql.has_table(self.name):
+            if self.pd_sql.has_table(self.name, self.schema):
                 if if_exists == 'fail':
                     raise ValueError("Table '%s' already exists." % name)
                 elif if_exists == 'replace':
-                    self.pd_sql.drop_table(self.name)
+                    self.pd_sql.drop_table(self.name, self.schema)
                     self.table = self._create_table_statement()
                     self.create()
                 elif if_exists == 'append':
-                    self.table = self.pd_sql.get_table(self.name)
+                    self.table = self.pd_sql.get_table(self.name, self.schema)
                     if self.table is None:
                         self.table = self._create_table_statement()
                 else:
@@ -559,13 +564,13 @@ class PandasSQLTable(PandasObject):
                 self.create()
         else:
             # no data provided, read-only mode
-            self.table = self.pd_sql.get_table(self.name)
+            self.table = self.pd_sql.get_table(self.name, self.schema)
 
         if self.table is None:
             raise ValueError("Could not init table '%s'" % name)
 
     def exists(self):
-        return self.pd_sql.has_table(self.name)
+        return self.pd_sql.has_table(self.name, self.schema)
 
     def sql_schema(self):
         from sqlalchemy.schema import CreateTable
@@ -679,7 +684,7 @@ class PandasSQLTable(PandasObject):
                     self.frame.index.get_level_values(i))
                 columns.insert(0, Column(idx_label, idx_type, index=True))
 
-        return Table(self.name, self.pd_sql.meta, *columns)
+        return Table(self.name, self.pd_sql.meta, *columns, schema=self.schema)
 
     def _harmonize_columns(self, parse_dates=None):
         """ Make a data_frame's column type align with an sql_table
@@ -810,9 +815,10 @@ class PandasSQLAlchemy(PandasSQL):
         return self.engine.execute(*args, **kwargs)
 
     def read_table(self, table_name, index_col=None, coerce_float=True,
-                   parse_dates=None, columns=None):
+                   parse_dates=None, columns=None, schema=None):
 
-        table = PandasSQLTable(table_name, self, index=index_col)
+        table = PandasSQLTable(
+            table_name, self, index=index_col, schema=schema)
         return table.read(coerce_float=coerce_float,
                           parse_dates=parse_dates, columns=columns)
 
@@ -835,26 +841,29 @@ class PandasSQLAlchemy(PandasSQL):
         return data_frame
 
     def to_sql(self, frame, name, if_exists='fail', index=True,
-               index_label=None):
+               index_label=None, schema=None):
         table = PandasSQLTable(
             name, self, frame=frame, index=index, if_exists=if_exists,
-            index_label=index_label)
+            index_label=index_label, schema=schema)
         table.insert()
 
     @property
     def tables(self):
         return self.meta.tables
 
-    def has_table(self, name):
-        return self.engine.has_table(name)
+    def has_table(self, name, schema=None):
+        return self.engine.has_table(name, schema)
 
-    def get_table(self, table_name):
-        return self.meta.tables.get(table_name)
+    def get_table(self, table_name, schema=None):
+        if schema:
+            return self.meta.tables.get('.'.join([schema, table_name]))
+        else:
+            return self.meta.tables.get(table_name)
 
-    def drop_table(self, table_name):
-        if self.engine.has_table(table_name):
-            self.meta.reflect(only=[table_name])
-            self.get_table(table_name).drop()
+    def drop_table(self, table_name, schema=None):
+        if self.engine.has_table(table_name, schema):
+            self.meta.reflect(only=[table_name], schema=schema)
+            self.get_table(table_name, schema).drop()
             self.meta.clear()
 
     def _create_sql_schema(self, frame, table_name):
